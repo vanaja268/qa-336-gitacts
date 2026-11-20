@@ -1,0 +1,119 @@
+name: CSN-336 CodeScan verification
+
+# Repo settings needed (Settings > Secrets and variables > Actions):
+#   secret  CODESCAN_TOKEN        - CodeScan token with scan + browse access
+#   var     CODESCAN_URL          - CodeScan instance WITH THE FIX (QA/Test env), e.g. https://<qa-host>/
+#   var     CODESCAN_ORG          - organization key
+#   var     CODESCAN_PROJECT_KEY  - project key (create the project first)
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      include_edge_cases:
+        description: "TC-08: also scan ./edge-cases (empty, syntax error, unicode file)"
+        type: boolean
+        default: false
+      large_project:
+        description: "TC-09: generate a large JS/LWC/VF workload for analysis-time comparison"
+        type: boolean
+        default: false
+      large_file_count:
+        description: "Number of generated files for TC-09"
+        default: "1500"
+      expect_fix:
+        description: "false = baseline/negative run against an env WITHOUT the fix (expects fcntl64 on Alpine)"
+        type: boolean
+        default: true
+
+env:
+  CODESCAN_URL: ${{ vars.CODESCAN_URL }}
+  CODESCAN_ORG: ${{ vars.CODESCAN_ORG }}
+  CODESCAN_PROJECT_KEY: ${{ vars.CODESCAN_PROJECT_KEY }}
+  CODESCAN_TOKEN: ${{ secrets.CODESCAN_TOKEN }}
+  SCAN_SOURCES: ${{ inputs.include_edge_cases && 'force-app,edge-cases' || 'force-app' }}${{ inputs.large_project && ',perf' || '' }}
+  EXPECT_FIX: ${{ (github.event_name == 'workflow_dispatch' && !inputs.expect_fix) && 'false' || 'true' }}
+
+# Jobs run one after another so they don't upload to the same project at the same time.
+jobs:
+  # TC-A: customer path - official CodeScan GitHub Action on ubuntu (glibc) runner. Covers push AND pull_request.
+  ubuntu-official-action:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Generate large project (TC-09)
+        if: ${{ inputs.large_project }}
+        run: python3 scripts/generate-large-project.py "${{ inputs.large_file_count }}"
+      - name: Run CodeScan (official action)
+        uses: codescan-io/codescan-scanner-action@2.0
+        with:
+          codeScanUrl: ${{ vars.CODESCAN_URL }}
+          login: ${{ secrets.CODESCAN_TOKEN }}
+          organization: ${{ vars.CODESCAN_ORG }}
+          projectKey: ${{ vars.CODESCAN_PROJECT_KEY }}
+          generateSarifFile: true
+          failOnRedQualityGate: false
+          args: |
+            sonar.sources=${{ env.SCAN_SOURCES }}
+            sonar.verbose=true
+      - name: Upload SARIF
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: csn336-ubuntu-action-sarif
+          path: codescan.sarif
+          if-no-files-found: warn
+
+  # TC-B: glibc regression with log assertions (ubuntu runner, plain SonarScanner CLI).
+  ubuntu-cli-checks:
+    if: ${{ always() && github.event_name != 'pull_request' }}
+    needs: ubuntu-official-action
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Generate large project (TC-09)
+        if: ${{ inputs.large_project }}
+        run: python3 scripts/generate-large-project.py "${{ inputs.large_file_count }}"
+      - name: Scan + CSN-336 assertions
+        env:
+          BRANCH_NAME: csn336-ubuntu-glibc
+          EXPECT_FIX: "true"   # glibc always worked; must still work with the new binary
+        run: bash scripts/run-codescan-cli.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: csn336-ubuntu-cli-log
+          path: codescan-scan.log
+
+  # TC-C: THE FIX - Alpine (musl) container, same environment family as the Copado runner in the ticket.
+  alpine-cli-checks:
+    if: ${{ always() && github.event_name != 'pull_request' }}
+    needs: ubuntu-cli-checks
+    runs-on: ubuntu-latest
+    container: alpine:3.20
+    steps:
+      - name: Install tools
+        run: apk add --no-cache bash git curl unzip python3 openjdk17-jre-headless
+      - uses: actions/checkout@v4
+      - name: Generate large project (TC-09)
+        if: ${{ inputs.large_project }}
+        run: python3 scripts/generate-large-project.py "${{ inputs.large_file_count }}"
+      - name: Scan + CSN-336 assertions
+        shell: bash
+        env:
+          BRANCH_NAME: csn336-alpine-musl
+        run: bash scripts/run-codescan-cli.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: csn336-alpine-cli-log
+          path: codescan-scan.log

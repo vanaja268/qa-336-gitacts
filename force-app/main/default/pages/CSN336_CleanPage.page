@@ -1,0 +1,5 @@
+<!-- CSN-336 TC-02: clean VF page with a JS Static Resource. Should analyse with NO JS issues. -->
+<apex:page showHeader="false" sidebar="false">
+    <apex:includeScript value="{!$Resource.csn336_clean_js}"/>
+    <h1>Clean page</h1>
+</apex:page>

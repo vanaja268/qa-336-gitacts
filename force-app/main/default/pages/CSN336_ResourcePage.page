@@ -1,0 +1,22 @@
+<!-- CSN-336 TC-01: VF page that loads a JS Static Resource via $Resource (exact ticket scenario)
+     plus inline JavaScript so the ESLint-based cs-vf / codescanlang sensor has work to do. -->
+<apex:page controller="CSN336Controller" showHeader="false" sidebar="false">
+    <apex:includeScript value="{!$Resource.csn336_app_js}"/>
+    <apex:includeScript value="{!URLFOR($Resource.csn336_lib, 'lib/csn336-lib.js')}"/>
+
+    <h1>CSN-336 Resource Page</h1>
+    <div id="out"></div>
+
+    <script>
+        // Seeded JS issues (inline script in VF)
+        var unusedInlineVar = 42;                       // unused variable
+        function inlineCompare(a) {
+            if (a == null) {                            // == instead of ===
+                console.log('inline null');             // console statement
+            }
+            eval('1 + 1');                              // eval usage
+            document.getElementById('out').innerHTML = '{!userInput}'; // unescaped merge field into innerHTML (XSS)
+        }
+        inlineCompare(null);
+    </script>
+</apex:page>

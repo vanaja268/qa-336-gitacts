@@ -1,0 +1,5 @@
+<aura:component implements="flexipage:availableForAllPageTypes">
+    <aura:attribute name="msg" type="String"/>
+    <lightning:button label="Go" onclick="{!c.handleClick}"/>
+    <div aura:id="out">{!v.msg}</div>
+</aura:component>
